@@ -1,6 +1,7 @@
 # 📡 Remote Morse Key System
 
 Ein WebSocket-basiertes Remote-Morse-System mit Token-Authentifizierung für sichere Verbindungen.
+Befindet sich noch in der Entwicklung, aber mal als Alpha Version zum Testen.
 
 ## 🎯 Übersicht
 
