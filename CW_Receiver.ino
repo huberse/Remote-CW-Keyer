@@ -23,11 +23,15 @@ WebServer server(80);  // HTTP Server auf Port 80
 bool ethConnected = false;
 bool useDHCP = true;  // true = DHCP (Standard), false = statische IP
 
+// WebSocket Authentifizierung
+String wsAuthToken = "morse2024";  // Standard-Token (sollte geändert werden!)
+
 // Status-Variablen
 struct ClientInfo {
   IPAddress ip;
   unsigned long connectedSince;
   bool isConnected;
+  bool isAuthenticated;
 };
 
 ClientInfo clients[WEBSOCKETS_SERVER_CLIENT_MAX];
@@ -69,45 +73,75 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
   switch(type) {
     case WStype_DISCONNECTED:
       Serial.printf("[%u] Client getrennt\n", num);
-      digitalWrite(OUTPUT_PIN, LOW);  // Bei Trennung Ausgang ausschalten
+      digitalWrite(OUTPUT_PIN, LOW);
       currentKeyState = false;
       if (num < WEBSOCKETS_SERVER_CLIENT_MAX) {
         clients[num].isConnected = false;
+        clients[num].isAuthenticated = false;
       }
       break;
       
     case WStype_CONNECTED:
       {
         IPAddress ip = webSocket.remoteIP(num);
-        Serial.printf("[%u] Client verbunden von %d.%d.%d.%d\n", num, ip[0], ip[1], ip[2], ip[3]);
+        Serial.printf("[%u] Client verbunden von %d.%d.%d.%d (noch nicht authentifiziert)\n", num, ip[0], ip[1], ip[2], ip[3]);
         if (num < WEBSOCKETS_SERVER_CLIENT_MAX) {
           clients[num].ip = ip;
           clients[num].connectedSince = millis();
           clients[num].isConnected = true;
+          clients[num].isAuthenticated = false;
         }
+        // Fordere Authentifizierung an
+        webSocket.sendTXT(num, "AUTH_REQUIRED");
       }
       break;
       
     case WStype_TEXT:
-      Serial.printf("[%u] Empfangen: %s\n", num, payload);
-      totalMessages++;
-      lastMessageTime = millis();
-      
-      // Morse-Status verarbeiten
-      if (strcmp((char*)payload, "DOWN") == 0) {
-        digitalWrite(OUTPUT_PIN, HIGH);
-        currentKeyState = true;
-        Serial.println(">>> Taste GEDRÜCKT");
-      } 
-      else if (strcmp((char*)payload, "UP") == 0) {
-        digitalWrite(OUTPUT_PIN, LOW);
-        currentKeyState = false;
-        Serial.println(">>> Taste LOSGELASSEN");
+      {
+        String message = String((char*)payload);
+        
+        // Prüfe ob Client authentifiziert ist
+        if (num < WEBSOCKETS_SERVER_CLIENT_MAX && !clients[num].isAuthenticated) {
+          // Erwarte AUTH:token Format
+          if (message.startsWith("AUTH:")) {
+            String receivedToken = message.substring(5);
+            if (receivedToken == wsAuthToken) {
+              clients[num].isAuthenticated = true;
+              webSocket.sendTXT(num, "AUTH_OK");
+              Serial.printf("[%u] Client authentifiziert!\n", num);
+            } else {
+              webSocket.sendTXT(num, "AUTH_FAILED");
+              Serial.printf("[%u] Authentifizierung fehlgeschlagen!\n", num);
+              webSocket.disconnect(num);
+            }
+            return;
+          } else {
+            // Keine Authentifizierung versucht
+            webSocket.sendTXT(num, "AUTH_REQUIRED");
+            webSocket.disconnect(num);
+            return;
+          }
+        }
+        
+        // Client ist authentifiziert - verarbeite Morse-Signale
+        Serial.printf("[%u] Empfangen: %s\n", num, payload);
+        totalMessages++;
+        lastMessageTime = millis();
+        
+        if (message == "DOWN") {
+          digitalWrite(OUTPUT_PIN, HIGH);
+          currentKeyState = true;
+          Serial.println(">>> Taste GEDRÜCKT");
+        } 
+        else if (message == "UP") {
+          digitalWrite(OUTPUT_PIN, LOW);
+          currentKeyState = false;
+          Serial.println(">>> Taste LOSGELASSEN");
+        }
       }
       break;
       
     case WStype_BIN:
-      // Binärdaten könnten für erweiterte Funktionen genutzt werden
       break;
       
     case WStype_ERROR:
@@ -133,8 +167,6 @@ void handleRoot() {
   html += F(".status{text-align:center}");
   html += F(".label{color:#666;font-size:11px;text-transform:uppercase;margin-bottom:5px}");
   html += F(".value{color:#333;font-size:20px;font-weight:bold}");
-  html += F(".light{width:80px;height:80px;border-radius:50%;margin:15px auto;background:#ddd;transition:all 0.1s}");
-  html += F(".light.on{background:#4CAF50;box-shadow:0 0 30px rgba(76,175,80,0.6)}");
   html += F("table{width:100%;border-collapse:collapse}");
   html += F("th{background:#f5f5f5;padding:10px;text-align:left;font-size:11px}");
   html += F("td{padding:10px;border-bottom:1px solid #eee}");
@@ -147,8 +179,6 @@ void handleRoot() {
   html += F("<div class='status'><div class='label'>Clients</div><div class='value' id='cnt'>0</div></div>");
   html += F("<div class='status'><div class='label'>Nachrichten</div><div class='value' id='msg'>0</div></div>");
   html += F("</div></div>");
-  html += F("<div class='card' style='text-align:center'><h2 style='margin-bottom:10px'>Morse Signal</h2>");
-  html += F("<div class='light' id='light'></div><p id='state'>Bereit</p></div>");
   html += F("<div class='card'><h2 style='margin-bottom:15px'>Verbundene Clients</h2>");
   html += F("<table><thead><tr><th>#</th><th>IP Adresse</th><th>Status</th><th>Verbunden seit</th></tr></thead>");
   html += F("<tbody id='tbl'><tr><td colspan='4' style='text-align:center;color:#999'>Keine Clients</td></tr></tbody></table></div>");
@@ -160,9 +190,6 @@ void handleRoot() {
   html += F("document.getElementById('ip').textContent=d.ip;");
   html += F("document.getElementById('cnt').textContent=d.clientCount;");
   html += F("document.getElementById('msg').textContent=d.totalMessages;");
-  html += F("const l=document.getElementById('light'),st=document.getElementById('state');");
-  html += F("if(d.keyState){l.classList.add('on');st.textContent='TASTE GEDRÜCKT';st.style.color='#4CAF50'}");
-  html += F("else{l.classList.remove('on');st.textContent='Bereit';st.style.color='#666'}");
   html += F("const tb=document.getElementById('tbl');");
   html += F("if(d.clients.length===0)tb.innerHTML='<tr><td colspan=\"4\" style=\"text-align:center;color:#999\">Keine Clients</td></tr>';");
   html += F("else tb.innerHTML=d.clients.map((c,i)=>`<tr><td>${i+1}</td><td>${c.ip}</td>");
@@ -222,6 +249,7 @@ void setup() {
   // Client-Array initialisieren
   for (int i = 0; i < WEBSOCKETS_SERVER_CLIENT_MAX; i++) {
     clients[i].isConnected = false;
+    clients[i].isAuthenticated = false;
   }
   
   // Ethernet initialisieren
@@ -270,6 +298,7 @@ void setup() {
   if (ethConnected) {
     Serial.println("WebSocket Server: ws://" + ETH.localIP().toString() + ":81");
     Serial.println("Web Interface: http://" + ETH.localIP().toString());
+    Serial.println("Auth Token: " + wsAuthToken);
   }
   Serial.println("Warte auf Verbindungen...\n");
 }
