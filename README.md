@@ -322,10 +322,8 @@ GET /api/status    → Status abrufen (JSON)
 ### Geplante Features
 
 - [ ] OTA (Over-The-Air) Updates
-- [ ] Mehrere Empfänger gleichzeitig
 - [ ] Morse-Decoder im Empfänger
 - [ ] Aufnahme & Wiedergabe von Morse-Sequenzen
-- [ ] MQTT-Integration
 - [ ] TLS/SSL-Verschlüsselung
 
 ### Mitmachen
